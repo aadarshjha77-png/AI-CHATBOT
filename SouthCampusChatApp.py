@@ -19,10 +19,24 @@ os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 st.set_page_config(page_title="AI ASSISTANT (DU)", layout="wide", page_icon="🤖")
 
 # Paths / constants
-BASE_INDEX_DIR = Path(r"C:\Users\aadar\Documents\PROJECT\AI-CHATBOT\FaissIndex")
+#--- BASE_INDEX_DIR = Path(r"C:\Users\aadar\Documents\PROJECT\AI-CHATBOT\FaissIndex") 
+
+BASE_INDEX_DIR = Path("FaissIndex")
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini-2025-04-14"
 TOP_K = 4
+
+@st.cache_data(ttl=300)
+def discover_indexes(base_dir: Path) -> Dict[str, Path]:
+    indexes = {}
+    if base_dir.exists():
+        for folder in sorted(base_dir.iterdir()):
+            faiss_path = folder / "faiss_index"
+            if folder.is_dir() and faiss_path.exists():
+                indexes[folder.name] = faiss_path
+    return indexes
+
+
 
 # ---- Session state defaults (add this once, near the top) ----
 if "mode" not in st.session_state: st.session_state.mode = "home"   # "home" | "chat"
@@ -115,16 +129,6 @@ def render_home():
                 st.session_state.mode = "chat"
                 st.session_state.query = s
                 st.rerun()
-
-
-@st.cache_data(ttl=300)
-def discover_indexes(base_dir:Path)->Dict[str,Path]:
-    m={}
-    if base_dir.exists():
-        for s in sorted(base_dir.iterdir()):
-            if s.is_dir() and (s/"faiss_index").exists():
-                m[s.name]=s/"faiss_index"
-    return m
 
 index_map=discover_indexes(BASE_INDEX_DIR)
 st.sidebar.header("Select Database")
