@@ -1,246 +1,266 @@
-# app_select_index_with_openai_key.py
-import os
+# ---- imports & config (replace your current imports block with this) ----
+import os, time
 import streamlit as st
 from pathlib import Path
 from typing import Dict
 
-# ===================== SET YOUR OPENAI KEY HERE =====================
-os.environ["OPENAI_API_KEY"] = 
-# ====================================================================
+# LangChain (install: pip install -U langchain-community langchain-openai langchain-core sentence-transformers faiss-cpu)
+from langchain_community.vectorstores import FAISS as CommunityFAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
 
-# ----------------- CONFIG -----------------
+# OpenAI key
+
+os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+
+# Basic Streamlit page setup (no logo)
+st.set_page_config(page_title="AI ASSISTANT (DU)", layout="wide", page_icon="🤖")
+
+# Paths / constants
 BASE_INDEX_DIR = Path(r"C:\Users\aadar\Documents\pdf\FaissIndex")
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_OPENAI_MODEL = "gpt-4.1-mini-2025-04-14"
 TOP_K = 4
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"   # you can change to "gpt-4o" etc.
-# ------------------------------------------
 
-# ---------- LOGO & TITLE (robust, centered) ----------
-BASE_DIR = Path(__file__).parent   # ensures path is relative to the script file
-LOGO_PATH = BASE_DIR / "assets" / "du_logo.png"
+# ---- Session state defaults (add this once, near the top) ----
+if "mode" not in st.session_state: st.session_state.mode = "home"   # "home" | "chat"
+if "query" not in st.session_state: st.session_state.query = ""
+if "history" not in st.session_state: st.session_state.history = []  # list of {role, text}
+if "typing" not in st.session_state: st.session_state.typing = False
+if "typing_full" not in st.session_state: st.session_state.typing_full = ""
+if "typing_pos" not in st.session_state: st.session_state.typing_pos = 0
+if "skip" not in st.session_state: st.session_state.skip = False
 
-# set page config first (must be before any other st.* calls)
-if LOGO_PATH.exists():
-    st.set_page_config(page_title="AI ASSISTANT (DU)", layout="wide", page_icon=str(LOGO_PATH))
-else:
-    st.set_page_config(page_title="AI ASSISTANT (DU)", layout="wide", page_icon="🎓")
+# Put this near the top (after imports and set_page_config)
+AVATAR_HTML = """
+<div style="display:flex;justify-content:center;margin:10px 0 6px 0;">
+  <svg width="125" height="140" viewBox="0 0 84 84" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <radialGradient id="grad" cx="30%" cy="30%" r="80%">
+        <stop offset="0%"  stop-color="#6EA8FE"/>
+        <stop offset="60%" stop-color="#9A7DF5"/>
+        <stop offset="100%" stop-color="#6F42C1"/>
+      </radialGradient>
+      <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="rgba(50,50,93,0.35)"/>
+      </filter>
+    </defs>
+    <circle cx="42" cy="42" r="38" fill="url(#grad)" filter="url(#shadow)"/>
+    <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle"
+          font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+          font-weight="700" font-size="26" fill="#ffffff" letter-spacing="1">AI</text>
+  </svg>
+</div>
+"""
 
-# show helpful debug info (optional)
-if not LOGO_PATH.exists():
-    st.warning(f"DU logo not found at: {LOGO_PATH}\nPlace the file 'du_logo.png' inside the folder: {BASE_DIR / 'assets'}")
-else:
-    # Create a centered header: use columns with three middle columns; put logo+title in center column
-    left, center, right = st.columns([0.9, 1, 1])
-    with center:
-        # put image and title stacked and centered
-        st.image(str(LOGO_PATH), width=300)
-       
-st.title("AI ASSISTANT FOR SOUTH CAMPUS (DU)")
+def header():
+    # render avatar
+    st.markdown(AVATAR_HTML, unsafe_allow_html=True)
+    # render title separately
+    st.markdown(
+        "<h2 style='text-align:center;margin:4px 0 12px 0;'>AI ASSISTANT FOR SOUTH CAMPUS (DU)</h2>",
+        unsafe_allow_html=True
+    )
 
-# ---- session state: chat history & config ----
-if "history" not in st.session_state:
-    # history is list of {"role": "user"|"assistant", "text": str, "sources": list}
-    st.session_state.history = []
+def render_home():
+    # render avatar first (NOT inside the CSS string)
+    st.markdown(AVATAR_HTML, unsafe_allow_html=True)
 
-# how many previous exchanges to include in prompt
-MAX_HISTORY = 6  # number of previous turns to include (change as needed)
-# -----------------------------------------------
+    # now render the rest of the hero section
+    st.markdown(
+        """
+        <style>
+        .hero { padding: 2rem 1rem 0.5rem 1rem; text-align: center; }
+        .hero h1 { font-size: 2.0rem; line-height: 1.2; margin: 0.4rem 0 0.6rem 0; }
+        .sub { color:#60666d; margin-bottom:1.2rem; }
+        .card { max-width: 820px; margin: 0.5rem auto; padding: 0.8rem 1rem;
+                border: 1px solid #e6e8eb; background:#fafafa; border-radius:12px; }
+        .chips { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:10px; }
+        .chip { border:1px solid #e6e8eb; padding:6px 10px; border-radius:999px; background:white; font-size:13px; }
+        </style>
+        <div class="hero">
+          <h1>How may I help you?</h1>
+          <div class="sub">Ask about departments, courses, admissions, research areas, facilities, and more.</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 
-# -------- Robust imports (works across LangChain versions) ----------
-CommunityFAISS = None
-# --- Latest LangChain v0.3+ imports (no fallbacks) ---
-# --- Modern LangChain v0.3+ imports ---
-# Modern LangChain imports (v0.3+)
-
-# Robust import block: prefer new langchain_community, but fallback to old langchain if needed
-try:
-    from langchain_community.vectorstores import FAISS as CommunityFAISS
-    from langchain_community.embeddings import HuggingFaceEmbeddings
-    from langchain_openai import ChatOpenAI
-    from langchain_core.messages import HumanMessage, SystemMessage
-    print("Using langchain_community imports")
-except Exception:
-    # fallback to older monolithic langchain layout
-    try:
-        from langchain.vectorstores import FAISS as CommunityFAISS
-        from langchain.embeddings import HuggingFaceEmbeddings
-        from langchain.chat_models import ChatOpenAI
-        from langchain_core.messages import HumanMessage, SystemMessage
-        print("Using legacy langchain imports")
-    except Exception as e:
-        raise ImportError(
-            "Could not import required LangChain modules. "
-            "Please install langchain-community (or legacy langchain) in the environment running Streamlit.\n"
-            f"Underlying error: {e}"
+    with st.form("home_form", clear_on_submit=False):
+        q = st.text_area(
+            "Type your question",
+            placeholder="e.g., Subjects in Semester 1 (Institute of Informatics & Communication)?",
+            height=90
         )
+        submitted = st.form_submit_button("Ask", use_container_width=True)
+    if submitted and q.strip():
+        st.session_state.mode = "chat"
+        st.session_state.query = q.strip()
+        st.rerun()
 
-# --------------------------------------
-# -----------------------------------------------------
+    # quick suggestions (no logos)
+    cols = st.columns(4)
+    sugg = [
+        "Faculty list for Biophysics & Bioinformatics",
+        "Research labs in South Campus",
+        "Course structure for M.Sc. Genetics",
+        "Admission criteria for IIC",
+    ]
+    for i, s in enumerate(sugg):
+        with cols[i % 4]:
+            if st.button(s, key=f"sugg_{i}", use_container_width=True):
+                st.session_state.mode = "chat"
+                st.session_state.query = s
+                st.rerun()
 
-# Discover FAISS indexes
+
 @st.cache_data(ttl=300)
-def discover_indexes(base_dir: Path) -> Dict[str, Path]:
-    """
-    Scan base_dir for subfolders that contain a 'faiss_index' folder.
-    Returns a mapping: folder_name -> path_to_faiss_index_folder
-    Example:
-      "Department (Biophysics and Bioinformatics).merged_header_tuples" ->
-      "C:\\Users\\aadar\\Documents\\pdf\\FaissIndex\\Department (Biophysics and Bioinformatics).merged_header_tuples\\faiss_index"
-    """
-    mapping = {}
-    if not base_dir.exists():
-        return mapping
+def discover_indexes(base_dir:Path)->Dict[str,Path]:
+    m={}
+    if base_dir.exists():
+        for s in sorted(base_dir.iterdir()):
+            if s.is_dir() and (s/"faiss_index").exists():
+                m[s.name]=s/"faiss_index"
+    return m
 
-    for sub in sorted(base_dir.iterdir()):
-        if not sub.is_dir():
-            continue
-        faiss_folder = sub / "faiss_index"
-        if faiss_folder.exists() and faiss_folder.is_dir():
-            mapping[sub.name] = faiss_folder
-
-    return mapping
-
-index_map = discover_indexes(BASE_INDEX_DIR)
+index_map=discover_indexes(BASE_INDEX_DIR)
+st.sidebar.header("Select Database")
 if not index_map:
-    st.warning(f"No FAISS indexes found under {BASE_INDEX_DIR.resolve()}.")
-    st.stop()
+    st.sidebar.warning("No FAISS indexes found.")
+    if st.session_state.mode=="home":
+        render_home(); st.stop()
+    else:
+        st.stop()
+selected_name=st.sidebar.selectbox("Choose FAISS DB",options=list(index_map.keys()))
+selected_index_path=index_map[selected_name]
+st.sidebar.markdown(f"**Selected:** `{selected_name}`")
 
-# Sidebar
-st.sidebar.header("Index / Retrieval settings")
-selected_name = st.sidebar.selectbox("Choose FAISS DB", options=list(index_map.keys()))
-k = st.sidebar.number_input("Top-k retrieved passages", value=TOP_K, min_value=1, max_value=20, step=1)
-use_llm = st.sidebar.checkbox("Use OpenAI LLM", value=True)
-openai_model_name = st.sidebar.text_input("OpenAI model name", value=DEFAULT_OPENAI_MODEL)
+st.sidebar.markdown("### Retrieval Settings")
 
-selected_index_path = index_map[selected_name]
-st.sidebar.markdown(f"**Selected path:** `{selected_index_path}`")
+deep_search = st.sidebar.toggle("Enable Deep Search 🔍", value=False)
+
+if deep_search:
+    k = 4   # retrieves more context
+else:
+    k = 2   # faster, short context
 
 
-# Load embeddings & FAISS
+if st.session_state.mode=="home":
+    render_home(); st.stop()
+
 @st.cache_resource
-def load_store(index_path: str, model_name: str):
-    # index_path should point to the folder that contains the saved index files
-    p = Path(index_path)
-    if not p.exists():
-        raise FileNotFoundError(f"Index path does not exist: {index_path}")
-
-    # instantiate embeddings
-    try:
-        embeddings = HuggingFaceEmbeddings(model_name=model_name)
-    except Exception as e:
-        raise RuntimeError(f"Failed to create HuggingFaceEmbeddings('{model_name}'): {e}")
-
-    # ensure CommunityFAISS is available
-    if CommunityFAISS is None:
-        raise RuntimeError("CommunityFAISS is not available. Check that langchain-community is installed.")
-
-    # load the FAISS index
-    try:
-        # some langchain-community versions accept allow_dangerous_deserialization kw
-        try:
-            store = CommunityFAISS.load_local(index_path, embeddings,allow_dangerous_deserialization=True)
-        except TypeError:
-            store = CommunityFAISS.load_local(index_path, embeddings, allow_dangerous_deserialization=True)
-    except Exception as e:
-        raise RuntimeError(f"Failed to load FAISS index from '{index_path}': {e}")
-
+def load_store(p:str):
+    emb=HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+    store=CommunityFAISS.load_local(p,emb,allow_dangerous_deserialization=True)
     return store
 
-with st.spinner("Loading FAISS index and embeddings..."):
-    store = load_store(str(selected_index_path), EMBEDDING_MODEL)
+with st.spinner("Loading FAISS index..."):
+    store=load_store(str(selected_index_path))
+st.success(f"Loaded: {selected_name}")
 
-st.success(f"Loaded index: **{selected_name}**")
+# Chat CSS and container
+st.markdown("""<style>
+.chat-container{max-height:430px;overflow-y:auto;padding:12px;border:1px solid #dcdcdc;background:#fafafa;border-radius:8px}
+.user-msg{background:#d9eafd;color:black;padding:8px 12px;border-radius:12px;margin:6px 0;width:fit-content;margin-left:auto;max-width:90%}
+.bot-msg{background:#ececec;color:black;padding:8px 12px;border-radius:12px;margin:6px 0;width:fit-content;margin-right:auto;max-width:90%}
+.send-row{display:flex;gap:8px}
+</style>""",unsafe_allow_html=True)
 
-query = st.text_input("Ask anything about the selected documents:")
+st.markdown("### Chat")
+st.markdown('<div class="chat-container">',unsafe_allow_html=True)
 
-if query:
-    retriever = store.as_retriever(search_kwargs={"k": k})
+# render history except pending typing
+for m in st.session_state.history:
+    cls="user-msg" if m["role"]=="user" else "bot-msg"
+    st.markdown(f'<div class="{cls}">{m["text"]}</div>',unsafe_allow_html=True)
 
-    # Step 1 — Retrieve relevant documents
-    with st.spinner("Retrieving relevant passages..."):
-        # use the vectorstore directly — synchronous and simple
-        retrieved_docs = store.similarity_search(query, k=k)
+# placeholder for typing bubble if active
+placeholder = st.empty()
+if st.session_state.typing:
+    text_to_show = st.session_state.typing_full
+    pos = st.session_state.typing_pos
+    # show partial
+    partial = " ".join(text_to_show.split()[0:pos]) if pos>0 else ""
+    placeholder.markdown(f'<div class="bot-msg">{partial}</div>',unsafe_allow_html=True)
+else:
+    placeholder.empty()
 
+st.markdown("</div>",unsafe_allow_html=True)
 
-    # Combine top documents into a context string
-    context_texts = []
-    for i, d in enumerate(retrieved_docs, start=1):
-        meta = d.metadata or {}
-        title = meta.get("source_file", "Unknown source")
-        page = meta.get("page", "?")
-        context_texts.append(f"[Source {i} | {title} | page {page}]\n{d.page_content}")
-
-    context = "\n\n".join(context_texts)
-
-    
-
-    # Step 3 — Ask OpenAI to synthesize answer
-    if os.getenv("OPENAI_API_KEY"):
-        st.subheader("AI Assistant Answer (based on retrieved context)")
-
-        llm = ChatOpenAI(
-            model_name="gpt-4o-mini",
-            temperature=0.3
-        )
-        system_prompt = (
-            "You are a knowledgeable and professional academic assistant. "
-            "Your task is to answer user questions **only** using the information found in the provided context below.\n\n"
-            "### Response Requirements:\n"
-            "1. Begin with a brief, friendly introduction that summarizes what the answer will cover.\n"
-            "2. Present the main answer in a clear, structured, and factual manner, citing relevant points from the context.\n"
-            "3. Avoid adding external knowledge that is not explicitly supported by the provided documents.\n"
-            "4. If the context does not contain the answer, clearly say: "
-            "'The information is not available in the provided documents.'\n"
-            "5. End your response with a concise conclusion or closing remark that summarizes the key takeaway.\n\n"
-            "### Tone & Style:\n"
-            "- Maintain a professional, informative, and neutral tone.\n"
-            "- Write in full sentences with correct grammar and clarity.\n"
-            "- Do not repeat the question unless it improves readability.\n\n"
-            "### Example format:\n"
-            "**Introduction:** A short overview of what the answer will explain.\n"
-            "**Answer:** Well-structured explanation supported by context.\n"
-            "**Conclusion:** A brief summary or closing statement.\n\n"
-            "Use this structure for every answer."
-        )
-
-
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"Context:\n{context}\n\nQuestion: {query}")
-        ]
-
-        with st.spinner("Generating answer..."):
-            response = llm.invoke(messages)
-
-        st.write(response.content.strip())
-
+# Input area (multi-line) and Send button (SEND1 style: Send ✉️)
+q = st.text_area("Your question", value=st.session_state.query, height=120, key="main_input")
+st.session_state.query = q
+cols = st.columns([1,0.2])
+with cols[1]:
+    send = st.button("Send ✉️",use_container_width=True)
+# Process send
+if send and st.session_state.query.strip():
+    user_q = st.session_state.query.strip()
+    st.session_state.history.append({"role":"user","text":user_q})
+    st.session_state.query = ""  # clear input to avoid repeats
+    # Retrieval
+    with st.spinner("Retrieving..."):
+        docs = store.similarity_search(user_q, k=TOP_K)
+    chunks = [d.page_content.strip() for d in docs if d.page_content.strip()]
+    if not chunks:
+        ans = "The information is not available in the provided documents."
     else:
-        st.warning("No OPENAI_API_KEY found. Please set your key to generate an answer.")
+        context = "\n".join(chunks)
+        system_prompt = ("Answer using only the information provided in the context. "
+                         "Do not add intro or conclusion. "
+                         "If multiple points, use bullet points with '•'. "
+                         "If only one fact, reply in one plain sentence. "
+                         "Do NOT mention sources.")
+        final_prompt = f"Context:\n{context}\n\nQuestion: {user_q}\n\nAnswer:"
+        llm = ChatOpenAI(model_name=DEFAULT_OPENAI_MODEL, temperature=0)
+        resp = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=final_prompt)])
+        ans = resp.content.strip()
+    # start typing sequence
+    st.session_state.typing=True
+    st.session_state.typing_full=ans
+    st.session_state.typing_pos=0
+    st.session_state.skip=False
+    # animate: reveal 3-5 words per step, medium speed ~0.04s
+    words = ans.split()
+    step_min,step_max=3,5
+    i=0
+    while i < len(words):
+        if st.session_state.skip:
+            # show full immediately
+            placeholder.markdown(f'<div class="bot-msg">{ans}</div>',unsafe_allow_html=True)
+            break
+        take = step_min if len(words)-i>step_min else (len(words)-i)
+        # adjust take to a small random-like pattern (fixed here to step_max when possible)
+        take = step_max if len(words)-i>=step_max else (len(words)-i)
+        i += take
+        st.session_state.typing_pos = i
+        partial = " ".join(words[0:i])
+        placeholder.markdown(f'<div class="bot-msg">{partial}</div>',unsafe_allow_html=True)
+        time.sleep(0.04)
+    # finish: append final text to history, stop typing, clear placeholders
+    st.session_state.history.append({"role":"assistant","text":ans})
+    st.session_state.typing=False
+    st.session_state.typing_full=""
+    st.session_state.typing_pos=0
+    placeholder.empty()
+    st.rerun()
 
-# ---- footer ----
-st.markdown(
-    """
-    <div style="
-        position: fixed;
-        left: 0;
-        bottom: 0;
-        width: 100%;
-        text-align: center;
-        padding: 5px 0;
-        background-color: #f0f2f6;
-        border-top: 0px solid #d3d3d3;
-        font-size: 14px;
-        font-family: 'Segoe UI', sans-serif;
-        color: #333;
-    ">
-        <span style="font-size:12px;">🎓</span>
-        <b>Developed at South Campus by Institute of Informatics & Communication</b> 
-        <span style="font-size:12px;">📘</span><br>
-    
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-# ----------------
+# Always show Skip Animation button for assistant messages during typing (SK2)
+if st.session_state.typing:
+    if st.button("Skip Animation ⏩"):
+        st.session_state.skip=True
+        st.rerun()
 
+# New conversation and Home buttons
+c1,c2 = st.columns([1,1])
+with c1:
+    if st.button("🧹 New Conversation"):
+        st.session_state.mode="home"; st.session_state.query=""; st.session_state.history=[]; st.session_state.typing=False; st.session_state.typing_full=""; st.rerun()
+with c2:
+    if st.button("🏠 Home"):
+        st.session_state.mode="home"; st.rerun()
+
+# Footer
+st.markdown("""<style>.footer{position:fixed;left:0;bottom:0;width:100%;text-align:center;padding:8px 0;background:#f0f2f6;border-top:1px solid #d3d3d3;font-size:14px;color:#333}.footer a{color:#004080;font-weight:600}.footer a:hover{color:#800000}</style><div class="footer">🎓 Developed at <a href="https://www.du.ac.in/" target="_blank">South Campus — University of Delhi</a> 📘<br><span style="color:#666">For internal academic use • Powered by AI 🤖</span></div>""",unsafe_allow_html=True)
