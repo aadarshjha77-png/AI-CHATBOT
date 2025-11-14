@@ -1,0 +1,11 @@
+streamlit
+langchain
+langchain-core
+langchain-community
+langchain-openai
+openai
+sentence-transformers
+tiktoken
+faiss-cpu==1.7.4
+python-dotenv
+numpy

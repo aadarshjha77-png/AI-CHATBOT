@@ -12,13 +12,14 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 # OpenAI key
 
+# Load key safely for both LOCAL and STREAMLIT CLOUD
 os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 
 # Basic Streamlit page setup (no logo)
 st.set_page_config(page_title="AI ASSISTANT (DU)", layout="wide", page_icon="🤖")
 
 # Paths / constants
-BASE_INDEX_DIR = Path(r"C:\Users\aadar\Documents\pdf\FaissIndex")
+BASE_INDEX_DIR = Path(r"C:\Users\aadar\Documents\PROJECT\AI-CHATBOT\FaissIndex")
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini-2025-04-14"
 TOP_K = 4
