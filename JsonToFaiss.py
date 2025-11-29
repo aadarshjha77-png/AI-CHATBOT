@@ -21,8 +21,8 @@ from langchain_community.embeddings import HuggingFaceEmbeddings  # new
 # ---------------------------------------------------------------------
 
 # ---------- CONFIG ----------
-DATA_DIR = Path(r"C:\Users\aadar\Documents\pdf\output")        # folder with your chunked JSON files
-OUTPUT_DIR = Path(r"C:\Users\aadar\Documents\pdf\FaissIndex")   # parent folder to store indexes
+DATA_DIR = Path(r"C:\Users\aadar\Documents\PROJECT\AI-CHATBOT\pdf")        # folder with your chunked JSON files
+OUTPUT_DIR = Path(r"C:\Users\aadar\Documents\PROJECT\AI-CHATBOT\FaissIndex")   # parent folder to store indexes
 BUILD_GLOBAL_INDEX = True            # set False to skip building a global index
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"  # change if desired
 # ----------------------------
